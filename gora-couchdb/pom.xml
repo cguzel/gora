@@ -131,6 +131,7 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- Apache CouchDB java client -->
     <dependency>
       <groupId>org.ektorp</groupId>
       <artifactId>org.ektorp</artifactId>

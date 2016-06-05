@@ -18,14 +18,17 @@
 
 package org.apache.gora.couchdb.store;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.gora.persistency.impl.PersistentBase;
 import org.apache.gora.query.PartitionQuery;
 import org.apache.gora.query.Query;
 import org.apache.gora.query.Result;
 import org.apache.gora.store.DataStoreFactory;
 import org.apache.gora.store.impl.DataStoreBase;
+import org.apache.gora.util.OperationNotSupportedException;
 import org.ektorp.CouchDbConnector;
 import org.ektorp.CouchDbInstance;
+import org.ektorp.ViewQuery;
 import org.ektorp.http.HttpClient;
 import org.ektorp.http.StdHttpClient;
 import org.ektorp.impl.StdCouchDbInstance;
@@ -36,15 +39,17 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 public class CouchDBStore<K,T extends PersistentBase> extends DataStoreBase<K,T> {
 
   private static final String DEFAULT_MAPPING_FILE = "gora-couchdb-mapping.xml";
   private static final String TAG_CLASS = "class";
+  private static final String TAG_FIELD = "field";
   private static final String ATT_NAME = "name";
-  private static final String ATT_TYPE = "type";
   private static final String ATT_KEYCLASS = "keyClass";
   private static final String ATT_DOCUMENT = "document";
 
@@ -55,7 +60,7 @@ public class CouchDBStore<K,T extends PersistentBase> extends DataStoreBase<K,T>
   @Override
   public void initialize(Class<K> keyClass, Class<T> persistentClass, Properties properties) {
     LOG.debug("Initializing CouchDB store");
-      super.initialize(keyClass, persistentClass, properties);
+      super.initialize(keyClass, persistentClass, properties);     //TODO keyclass=LONG verildi. xml'de ve tutorial
 
     HttpClient httpClient = null;
     try {
@@ -79,9 +84,10 @@ public class CouchDBStore<K,T extends PersistentBase> extends DataStoreBase<K,T>
   }
 
   protected CouchDBMapping readMapping(String filename) throws IOException {
+    CouchDBMapping couchDBMapping = new CouchDBMapping();
     try {
       SAXBuilder saxBuilder = new SAXBuilder();
-      InputStream is = getClass().getResourceAsStream(filename);
+      InputStream is = getClass().getClassLoader().getResourceAsStream(filename);
       if (is == null) {
         String msg = "Unable to load the mapping from resource '" + filename
             + "' as it does not appear to exist! " + "Trying local file.";
@@ -94,7 +100,13 @@ public class CouchDBStore<K,T extends PersistentBase> extends DataStoreBase<K,T>
       for (Element classElement : classElements) {
         if (haveKeyClass(keyClass, classElement)
             && havePersistentClass(persistentClass, classElement)) {
-          return getSchemaName(classElement.getAttributeValue(ATT_DOCUMENT), persistentClass)
+          couchDBMapping.setDatabaseName(getSchemaName(classElement.getAttributeValue(ATT_DOCUMENT), persistentClass));
+
+          List<Element> fields = classElement.getChildren(TAG_FIELD);
+          for (Element field : fields) {
+            couchDBMapping.addColumn(field.getAttributeValue(ATT_NAME), mapping.getDatabaseName()); //FIXME
+          }
+          break;
         }
       }
     } catch (Exception ex) {
@@ -102,7 +114,7 @@ public class CouchDBStore<K,T extends PersistentBase> extends DataStoreBase<K,T>
       LOG.error(ex.getStackTrace().toString());
       throw new IOException(ex);
     }
-    throw new IOException("Unable to load the mapping from resource"); //FIXME
+    return couchDBMapping;
   }
 
 
@@ -145,60 +157,50 @@ public class CouchDBStore<K,T extends PersistentBase> extends DataStoreBase<K,T>
 
   @Override
   public T get(final K key, final String[] fields) {
-//    String[] dbFields = getFieldsToQuery(fields);
-//
-//    for (String f : fields) {
-//      HBaseColumn col = mapping.getColumn(f);
-//      if (col == null) {
-//        throw new  RuntimeException("CouchDB mapping for field ["+ f +"] not found. " +
-//            "Wrong gora-couchdb-mapping.xml?");
-//      }
-//      Schema fieldSchema = fieldMap.get(f).schema();
-//      addFamilyOrColumn(get, col, fieldSchema);
-//    }
-//
-
-    return null;
+      return (T) db.get(Map.class, key.toString());
   }
 
   @Override
   public void put(K key, T obj) {
-    db.upda
+    final Map<String, Object> referenceData = new HashMap<>();
+    referenceData.put(key.toString(), obj);
+    db.update(referenceData);
   }
 
   @Override
   public boolean delete(K key) {
-    return false;
+    return StringUtils.isNotEmpty(db.delete(key));
   }
 
   @Override
   public long deleteByQuery(Query<K, T> query) {
-    return 0;
+    throw new OperationNotSupportedException("delete is not supported for CoucchDBStore"); //FIXME create couchdbQuery
   }
 
   @Override
   public Result<K, T> execute(Query<K, T> query) {
-    return null;
+    throw new OperationNotSupportedException("execute is not supported for CoucchDBStore"); //FIXME create couchdbQuery
   }
 
   @Override
   public Query<K, T> newQuery() {
-    return null;
+    throw new OperationNotSupportedException("newQuery is not supported for CoucchDBStore"); //FIXME create couchdbQuery
+
   }
 
   @Override
   public List<PartitionQuery<K, T>> getPartitions(Query<K, T> query)
       throws IOException {
-    return null;
+    throw new OperationNotSupportedException("execute is not supported for CoucchDBStore"); //FIXME create couchdbQuery
+
   }
 
   @Override
   public void flush() {
-
+    db.flushBulkBuffer();     //FIXME is true?
   }
 
   @Override
   public void close() {
-
   }
 }
