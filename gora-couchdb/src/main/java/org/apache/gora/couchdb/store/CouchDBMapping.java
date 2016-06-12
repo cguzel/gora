@@ -1,14 +1,15 @@
 package org.apache.gora.couchdb.store;
 
+import org.jdom.Element;
+
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class CouchDBMapping {
 
-  String databaseName;
-  private final Map<String, String> columnMap = new HashMap<>();
-
-
+  public String databaseName;
+  public List<Element> fields;
 
   public String getDatabaseName() {
     return databaseName;
@@ -18,8 +19,5 @@ public class CouchDBMapping {
     this.databaseName = databaseName;
   }
 
-  public void addColumn(String key, String name) {
-    columnMap.put(key,name);
-  }
 
 }

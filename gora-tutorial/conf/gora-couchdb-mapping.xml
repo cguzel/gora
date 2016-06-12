@@ -17,30 +17,25 @@
 -->
 
 <!--
-  Gora Mapping file for HBase Backend
+  Gora Mapping file for CouchDB Backend
 -->
 <gora-otd>
-  <table name="Pageview"> <!-- optional descriptors for tables -->
-    <family name="common"/> <!-- This can also have params like compression, bloom filters -->
-    <family name="http"/>
-    <family name="misc"/>
-  </table>
 
-  <class name="org.apache.gora.tutorial.log.generated.Pageview" keyClass="java.lang.Long" table="AccessLog">
-    <field name="url" family="common" qualifier="url"/>
-    <field name="timestamp" family="common" qualifier="timestamp"/>
-    <field name="ip" family="common" qualifier="ip" />
-    <field name="httpMethod" family="http" qualifier="httpMethod"/>
-    <field name="httpStatusCode" family="http" qualifier="httpStatusCode"/>
-    <field name="responseSize" family="http" qualifier="responseSize"/>
-    <field name="referrer" family="misc" qualifier="referrer"/>
-    <field name="userAgent" family="misc" qualifier="userAgent"/>
+  <class name="org.apache.gora.tutorial.log.generated.Pageview" keyClass="java.lang.Long" document="AccessLog">
+    <field name="url"/>
+    <field name="timestamp"/>
+    <field name="ip"/>
+    <field name="httpMethod"/>
+    <field name="httpStatusCode"/>
+    <field name="responseSize"/>
+    <field name="referrer"/>
+    <field name="userAgent"/>
   </class>
 
-  <class name="org.apache.gora.tutorial.log.generated.MetricDatum" keyClass="java.lang.String" table="Metrics">
-    <field name="metricDimension" family="common"  qualifier="metricDimension"/>
-    <field name="timestamp" family="common" qualifier="ts"/>
-    <field name="metric" family="common" qualifier="metric"/>
+  <class name="org.apache.gora.tutorial.log.generated.MetricDatum" keyClass="java.lang.String" document="Metrics">
+    <field name="metricDimension"/>
+    <field name="timestamp"/>
+    <field name="metric"/>
   </class>
 
 </gora-otd>
