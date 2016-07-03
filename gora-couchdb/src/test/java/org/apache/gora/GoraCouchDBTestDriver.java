@@ -18,11 +18,8 @@
 
 package org.apache.gora;
 
-
-import org.apache.gora.GoraTestDriver;
 import org.apache.gora.couchdb.store.CouchDBMapping;
 import org.apache.gora.couchdb.store.CouchDBStore;
-
 import org.ektorp.CouchDbConnector;
 import org.ektorp.CouchDbInstance;
 
