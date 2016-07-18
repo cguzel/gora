@@ -54,7 +54,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
   protected static final Logger LOG = LoggerFactory.getLogger(CouchDBStore.class);
 
-  private static final String DEFAULT_MAPPING_FILE = "gora-couchdb-mapping.xml";
+  public static final String DEFAULT_MAPPING_FILE = "gora-couchdb-mapping.xml";
   private static final ConcurrentHashMap<Schema, SpecificDatumReader<?>> readerMap = new ConcurrentHashMap<>();
 
   private CouchDBMapping mapping;
@@ -66,10 +66,12 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     LOG.debug("Initializing CouchDB store");
     super.initialize(keyClass, persistentClass, properties);
 
+    CouchDBParameters params = CouchDBParameters.load(conf);
+
     try {
       final String mappingFile = DataStoreFactory.getMappingFile(properties, this, DEFAULT_MAPPING_FILE);
       final HttpClient httpClient = new StdHttpClient.Builder()
-          .url(properties.getProperty("url"))
+          .url("http://" +params.getServer()+":"+params.getPort())
           .build();
       dbInstance = new StdCouchDbInstance(httpClient);
 
@@ -181,9 +183,6 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
         .includeDocs(true)
         .limit(Ints.checkedCast(query.getLimit())); //FIXME GORA have long value but ektorp client use integer
 
-    List<T> bulkLoaded = db.<T>queryView(viewQuery, new Class<T>());
-
-
     CouchDBResult<K, T> couchDBResult = new CouchDBResult<>(this, query, db.queryView(viewQuery, Map.class));
 
     return couchDBResult;
@@ -286,7 +285,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     SpecificDatumReader<?> reader = readerMap.get(fieldSchema);
     if (reader == null) {
       reader = new SpecificDatumReader(fieldSchema);// ignore dirty bits
-      final SpecificDatumReader localReader = readerMap.putIfAbsent(fieldSchema, reader)
+      final SpecificDatumReader localReader = readerMap.putIfAbsent(fieldSchema, reader) ;
       if (localReader != null) {
         reader = localReader;
       }
