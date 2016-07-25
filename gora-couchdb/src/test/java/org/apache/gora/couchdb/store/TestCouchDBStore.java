@@ -51,12 +51,9 @@ public class TestCouchDBStore extends DataStoreTestBase {
     }
   }
 
-  private Configuration conf;
-
   @Override
   public void setUp() throws Exception {
     super.setUp();
-    conf = new Configuration();
   }
 
   @SuppressWarnings("unchecked")

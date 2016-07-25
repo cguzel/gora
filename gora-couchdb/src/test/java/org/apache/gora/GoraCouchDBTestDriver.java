@@ -20,27 +20,43 @@ package org.apache.gora;
 
 import org.apache.gora.couchdb.store.CouchDBParameters;
 import org.apache.gora.couchdb.store.CouchDBStore;
+import org.apache.gora.persistency.Persistent;
+import org.apache.gora.store.DataStore;
+import org.apache.gora.store.DataStoreFactory;
+import org.apache.gora.util.GoraException;
 import org.testcontainers.containers.GenericContainer;
 
-/**
- * Helper class for third part tests using gora-couchdb backend.
- * @see GoraTestDriver
- */
+import java.util.Properties;
+
 public class GoraCouchDBTestDriver extends GoraTestDriver {
 
-  private final GenericContainer couchdb;
+  private final GenericContainer couchdbContainer;
+  private Properties properties = DataStoreFactory.createProps();
+
   /**
    * Default constructor
    */
-  public GoraCouchDBTestDriver(GenericContainer couchdb) {
+  public GoraCouchDBTestDriver(GenericContainer couchdbContainer) {
     super(CouchDBStore.class);
-    this.couchdb =couchdb;
+    this.couchdbContainer = couchdbContainer;
   }
 
   @Override
   public void setUpClass() throws Exception {
-    super.setUpClass();
-    conf.set(CouchDBParameters.PROP_COUCHDB_PORT, couchdb.getMappedPort(5984).toString());
+    properties.put(CouchDBParameters.PROP_COUCHDB_PORT, couchdbContainer.getMappedPort(5984).toString());
+  }
+
+  @Override
+  public <K, T extends Persistent> DataStore<K, T> createDataStore(Class<K> keyClass, Class<T> persistentClass)
+      throws GoraException {
+
+    final DataStore<K, T> dataStore = DataStoreFactory
+        .createDataStore((Class<? extends DataStore<K, T>>) dataStoreClass, keyClass, persistentClass, conf,
+            properties);
+    dataStores.add(dataStore);
+
+    log.info("Datastore for " + persistentClass + " was added.");
+    return dataStore;
   }
 
 }

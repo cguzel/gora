@@ -50,10 +50,10 @@ public class CouchDBParameters {
     return Integer.parseInt(port);
   }
 
-  public static CouchDBParameters load(Configuration conf) {
-    String mappingFile = conf.get(PROP_MAPPING_FILE, CouchDBStore.DEFAULT_MAPPING_FILE);
-    String couchDBServer = conf.get(PROP_COUCHDB_SERVER);
-    String couchDBPort = conf.get(PROP_COUCHDB_PORT);
+  public static CouchDBParameters load(Properties properties) {
+    String mappingFile = properties.getProperty(PROP_MAPPING_FILE, CouchDBStore.DEFAULT_MAPPING_FILE);
+    String couchDBServer = properties.getProperty(PROP_COUCHDB_SERVER);
+    String couchDBPort = properties.getProperty(PROP_COUCHDB_PORT);
 
     return new CouchDBParameters(mappingFile, couchDBServer, couchDBPort);
   }
