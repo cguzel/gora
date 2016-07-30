@@ -21,7 +21,6 @@ package org.apache.gora.couchdb.store;
 import com.google.common.primitives.Ints;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
-import org.apache.avro.specific.SpecificData;
 import org.apache.avro.specific.SpecificDatumReader;
 import org.apache.avro.specific.SpecificDatumWriter;
 import org.apache.avro.util.Utf8;
@@ -57,14 +56,25 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Implementation of a CouchDB data store to be used by gora.
+ *
+ * @param <K> class to be used for the key
+ * @param <T> class to be persisted within the store
+ */
 public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, T> {
 
+  /**
+   * Logging implementation
+   */
   protected static final Logger LOG = LoggerFactory.getLogger(CouchDBStore.class);
 
+  /**
+   * The default file name value to be used for obtaining the CouchDB object field mapping's
+   */
   public static final String DEFAULT_MAPPING_FILE = "gora-couchdb-mapping.xml";
 
   public static final ConcurrentHashMap<Schema, SpecificDatumReader<?>> readerMap = new ConcurrentHashMap<>();
-
   public static final ConcurrentHashMap<Schema, SpecificDatumWriter<?>> writerMap = new ConcurrentHashMap<>();
 
   /**
@@ -72,10 +82,34 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
    */
   public static final int DEFAULT_UNION_SCHEMA = 0;
 
+  /**
+   * Mapping definition for CouchDB
+   */
   private CouchDBMapping mapping;
+
+  /**
+   * The standard implementation of the CouchDbInstance interface. This interface provides methods for
+   * managing databases on the connected CouchDb instance.
+   * StdCouchDbInstance is thread-safe.
+   */
   private CouchDbInstance dbInstance;
+
+  /**
+   * The standard implementation of the CouchDbConnector interface. This interface provides methods for
+   * manipulating documents within a specific database.
+   * StdCouchDbConnector is thread-safe.
+   */
   private CouchDbConnector db;
 
+  /**
+   * Initialize the data store by reading the credentials, setting the client's properties up and
+   * reading the mapping file. Initialize is called when then the call to
+   * {@link org.apache.gora.store.DataStoreFactory#createDataStore} is made.
+   *
+   * @param keyClass
+   * @param persistentClass
+   * @param properties
+   */
   @Override
   public void initialize(Class<K> keyClass, Class<T> persistentClass, Properties properties) {
     LOG.debug("Initializing CouchDB store");
@@ -86,9 +120,9 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     try {
       final String mappingFile = DataStoreFactory.getMappingFile(properties, this, DEFAULT_MAPPING_FILE);
       final HttpClient httpClient = new StdHttpClient.Builder()
-          .url("http://" +params.getServer()+":"+params.getPort())
-//          .username(params.getUser())
-//          .password(params.getPass())
+          .url("http://" + params.getServer() + ":" + params.getPort())
+          //          .username(params.getUser())
+          //          .password(params.getPass())
           .build();
 
       dbInstance = new StdCouchDbInstance(httpClient);
@@ -110,16 +144,19 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     }
   }
 
+  /**
+   * In CouchDB, Schemas are referred to as database name.
+   *
+   * @return databasename
+   */
   @Override
   public String getSchemaName() {
     return mapping.getDatabaseName();
   }
 
-  @Override
-  public String getSchemaName(final String mappingSchemaName, final Class<?> persistentClass) {
-    return super.getSchemaName(mappingSchemaName, persistentClass);
-  }
-
+  /**
+   * Create a new database in CouchDB if necessary.
+   */
   @Override
   public void createSchema() {
     if (schemaExists()) {
@@ -128,6 +165,9 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     dbInstance.createDatabase(mapping.getDatabaseName());
   }
 
+  /**
+   * Drop the database.
+   */
   @Override
   public void deleteSchema() {
     if (schemaExists()) {
@@ -135,11 +175,20 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     }
   }
 
+  /**
+   * Check if the database already exists or should be created.
+   */
   @Override
   public boolean schemaExists() {
     return dbInstance.checkIfDbExists(mapping.getDatabaseName());
   }
 
+  /**
+   * Retrieve an entry from the store with only selected fields.
+   *
+   * @param key    identifier of the document in the database
+   * @param fields list of fields to be loaded from the database
+   */
   @Override
   public T get(final K key, final String[] fields) {
 
@@ -153,6 +202,12 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     }
   }
 
+  /**
+   * Persist an object into the store.
+   *
+   * @param key identifier of the object in the store
+   * @param obj the object to be inserted
+   */
   @Override
   public void put(K key, T obj) {
 
@@ -178,48 +233,48 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
   }
 
-  private Object serializeFieldValue(Schema fieldSchema, Object fieldValue ){
-    switch(fieldSchema.getType()) {
+  private Object serializeFieldValue(Schema fieldSchema, Object fieldValue) {
+    switch (fieldSchema.getType()) {
 
-      case MAP:
-      case ARRAY:
-      case RECORD:
-        byte[] data = null;
+    case MAP:
+    case ARRAY:
+    case RECORD:
+      byte[] data = null;
+      try {
+        @SuppressWarnings("rawtypes")
+        SpecificDatumWriter writer = getDatumWriter(fieldSchema);
+        data = IOUtils.serialize(writer, fieldValue);
+      } catch (IOException e) {
+        LOG.error(e.getMessage(), e);
+      }
+      fieldValue = data;
+      break;
+    case BYTES:
+      fieldValue = ((ByteBuffer) fieldValue).array();
+      break;
+    case ENUM:
+    case STRING:
+      fieldValue = fieldValue.toString();
+      break;
+    case UNION:
+      // If field's schema is null and one type, we do undertake serialization.
+      // All other types are serialized.
+      if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
+        int schemaPos = getUnionSchema(fieldValue, fieldSchema);
+        Schema unionSchema = fieldSchema.getTypes().get(schemaPos);
+        fieldValue = serializeFieldValue(unionSchema, fieldValue);
+      } else {
+        byte[] serilazeData = null;
         try {
           @SuppressWarnings("rawtypes")
           SpecificDatumWriter writer = getDatumWriter(fieldSchema);
-          data = IOUtils.serialize(writer, fieldValue);
+          serilazeData = IOUtils.serialize(writer, fieldValue);
         } catch (IOException e) {
           LOG.error(e.getMessage(), e);
         }
-        fieldValue = data;
-        break;
-      case BYTES:
-        fieldValue = ((ByteBuffer) fieldValue).array();
-        break;
-      case ENUM:
-      case STRING:
-        fieldValue = fieldValue.toString();
-        break;
-      case UNION:
-        // If field's schema is null and one type, we do undertake serialization.
-        // All other types are serialized.
-        if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
-          int schemaPos = getUnionSchema(fieldValue, fieldSchema);
-          Schema unionSchema = fieldSchema.getTypes().get(schemaPos);
-          fieldValue = serializeFieldValue(unionSchema, fieldValue);
-        } else {
-          byte[] serilazeData = null;
-          try {
-            @SuppressWarnings("rawtypes")
-            SpecificDatumWriter writer = getDatumWriter(fieldSchema);
-            serilazeData = IOUtils.serialize(writer, fieldValue);
-          } catch (IOException e) {
-            LOG.error(e.getMessage(), e);
-          }
-          fieldValue = serilazeData;
-        }
-        break;
+        fieldValue = serilazeData;
+      }
+      break;
     default:
       break;
     }
@@ -236,7 +291,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     return writer;
   }
 
-  private int getUnionSchema(Object pValue, Schema pUnionSchema){
+  private int getUnionSchema(Object pValue, Schema pUnionSchema) {
     int unionSchemaPos = 0;
     //    String valueType = pValue.getClass().getSimpleName();
     for (Schema currentSchema : pUnionSchema.getTypes()) {
@@ -267,6 +322,12 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     return DEFAULT_UNION_SCHEMA;
   }
 
+  /**
+   * Deletes the object with the given key
+   *
+   * @param key the key of the object
+   * @return whether the object was successfully deleted
+   */
   @Override
   public boolean delete(K key) {
     final String keyString = key.toString();
@@ -274,11 +335,21 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     return StringUtils.isNotEmpty(db.delete(keyString, referenceData.get("_rev").toString()));
   }
 
+  /**
+   * Deletes all the objects matching the query.
+   * See also the note on <a href="#visibility">visibility</a>.
+   *
+   * @param query matching records to this query will be deleted
+   * @return number of deleted records
+   */
   @Override
   public long deleteByQuery(Query<K, T> query) {
     return delete(query.getKey()) ? 1 : 0;
   }
 
+  /**
+   * Create a new {@link Query} to query the datastore.
+   */
   @Override
   public Query<K, T> newQuery() {
     CouchDBQuery<K, T> query = new CouchDBQuery<>(this);
@@ -286,6 +357,9 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     return query;
   }
 
+  /**
+   * Execute the query and return the result.
+   */
   @Override
   public Result<K, T> execute(Query<K, T> query) {
     query.setFields(getFieldsToQuery(query.getFields()));
@@ -309,7 +383,15 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     return list;
   }
 
-  public T newInstance(Map<String,Object> result, String[] fields)
+  /**
+   * Creates a new Persistent instance with the values in 'result' for the fields listed.
+   *
+   * @param result result from the query to the database
+   * @param fields the list of fields to be mapped to the persistence class instance
+   * @return a persistence class instance which content was deserialized
+   * @throws IOException
+   */
+  public T newInstance(Map<String, Object> result, String[] fields)
       throws IOException {
     if (result == null)
       return null;
@@ -317,7 +399,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     T persistent = newPersistent();
 
     for (String f : result.keySet()) {
-      if(f.equals("_id") || f.equals("_rev")){
+      if (f.equals("_id") || f.equals("_rev")) {
         continue;
       }
       final Field field = fieldMap.get(f);
@@ -346,7 +428,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       break;
     case BYTES:
       ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
-      fieldValue = ByteBuffer.wrap(byteOut.toByteArray()) ;
+      fieldValue = ByteBuffer.wrap(byteOut.toByteArray());
       break;
     case STRING:
       fieldValue = new Utf8(value.toString());
@@ -393,7 +475,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     SpecificDatumReader<?> reader = readerMap.get(fieldSchema);
     if (reader == null) {
       reader = new SpecificDatumReader(fieldSchema);// ignore dirty bits
-      final SpecificDatumReader localReader = readerMap.putIfAbsent(fieldSchema, reader) ;
+      final SpecificDatumReader localReader = readerMap.putIfAbsent(fieldSchema, reader);
       if (localReader != null) {
         reader = localReader;
       }

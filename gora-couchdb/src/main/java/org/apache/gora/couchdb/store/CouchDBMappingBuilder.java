@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,31 +18,39 @@
 package org.apache.gora.couchdb.store;
 
 import org.apache.gora.persistency.impl.PersistentBase;
-import org.jdom.Document;
 import org.jdom.Element;
 import org.jdom.input.SAXBuilder;
 
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
 public class CouchDBMappingBuilder<K, T extends PersistentBase> {
 
+  // Class description
   private static final String TAG_CLASS = "class";
   private static final String TAG_FIELD = "field";
-  private static final String ATT_NAME = "name";
   private static final String ATT_KEYCLASS = "keyClass";
   private static final String ATT_DOCUMENT = "document";
 
-  private final CouchDBStore<K, T> dataStore;
+  // Document description
+  private static final String ATT_NAME = "name";
+
+  /**
+   * Mapping instance being built
+   */
   private final CouchDBMapping mapping;
+
+  private final CouchDBStore<K, T> dataStore;
 
   public CouchDBMappingBuilder(final CouchDBStore<K, T> store) {
     this.dataStore = store;
     this.mapping = new CouchDBMapping();
   }
 
+  /**
+   * Return the built mapping if it is in a legal state
+   */
   public CouchDBMapping build() {
     if (mapping.getDatabaseName() == null)
       throw new IllegalStateException("A collection is not specified");
@@ -62,7 +70,8 @@ public class CouchDBMappingBuilder<K, T extends PersistentBase> {
 
       for (Element classElement : classElements) {
         if (haveKeyClass(keyClass, classElement) && havePersistentClass(persistentClass, classElement)) {
-          mapping.setDatabaseName(dataStore.getSchemaName(classElement.getAttributeValue(ATT_DOCUMENT), persistentClass));
+          mapping
+              .setDatabaseName(dataStore.getSchemaName(classElement.getAttributeValue(ATT_DOCUMENT), persistentClass));
           mapping.fields = classElement.getChildren(TAG_FIELD);
           break;
         }

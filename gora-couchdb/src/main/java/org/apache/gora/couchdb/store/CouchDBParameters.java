@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,21 +17,37 @@
  */
 package org.apache.gora.couchdb.store;
 
-import org.apache.hadoop.conf.Configuration;
-
 import java.util.Properties;
 
+/**
+ * Configuration properties
+ */
 public class CouchDBParameters {
 
+  /**
+   * Property pointing to the file for the mapping
+   */
   public static final String PROP_MAPPING_FILE = "gora.couchdb.mapping.file";
 
+  /**
+   * Property pointing to the host where the server is running
+   */
   public static final String PROP_COUCHDB_SERVER = "gora.datastore.couchdb.server";
+
+  /**
+   * Property pointing to the port where the server is running
+   */
   public static final String PROP_COUCHDB_PORT = "gora.datastore.couchdb.port";
 
   private final String mappingFile;
   private final String server;
   private final String port;
 
+  /**
+   * @param mappingFile
+   * @param server
+   * @param port
+   */
   private CouchDBParameters(String mappingFile, String server, String port) {
     this.mappingFile = mappingFile;
     this.server = server;
