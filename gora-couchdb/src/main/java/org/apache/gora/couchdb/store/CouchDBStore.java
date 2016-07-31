@@ -50,8 +50,7 @@ import org.ektorp.support.CouchDbDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -155,6 +154,18 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
   }
 
   /**
+   * In CouchDB, Schemas are referred to as database name.
+   *
+   * @param mappingSchemaName the name of the schema as read from the mapping file
+   * @param persistentClass   persistent class
+   * @return database name
+   */
+  @Override
+  public String getSchemaName(final String mappingSchemaName, final Class<?> persistentClass) {
+    return super.getSchemaName(mappingSchemaName, persistentClass);
+  }
+
+  /**
    * Create a new database in CouchDB if necessary.
    */
   @Override
@@ -222,9 +233,10 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
         continue;
       }
       Field field = fields.get(i);
-      Schema.Type type = field.schema().getType();
       Object fieldValue = obj.get(field.pos());
+
       Schema fieldSchema = field.schema();
+
       // check if field has a nested structure (array, map, record or union)
       fieldValue = serializeFieldValue(fieldSchema, fieldValue);
       doc.put(field.name(), fieldValue);
@@ -233,21 +245,31 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
   }
 
-  private Object serializeFieldValue(Schema fieldSchema, Object fieldValue) {
-    switch (fieldSchema.getType()) {
+  private Object convertFromBytes(byte[] bytes) throws IOException, ClassNotFoundException {
+    try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
+         ObjectInput in = new ObjectInputStream(bis)) {
+      return in.readObject();
+    }
+  }
 
+  private Object serializeFieldValue(Schema fieldSchema, Object fieldValue) {
+    byte[] serilazeData = null;
+
+    switch (fieldSchema.getType()) {
     case MAP:
     case ARRAY:
     case RECORD:
-      byte[] data = null;
       try {
-        @SuppressWarnings("rawtypes")
-        SpecificDatumWriter writer = getDatumWriter(fieldSchema);
-        data = IOUtils.serialize(writer, fieldValue);
+        SpecificDatumWriter writer = writerMap.get(fieldSchema);
+        if (writer == null) {
+          writer = new SpecificDatumWriter(fieldSchema);// ignore dirty bits
+          writerMap.put(fieldSchema, writer);
+        }
+        serilazeData = IOUtils.serialize(writer, fieldValue);
       } catch (IOException e) {
         LOG.error(e.getMessage(), e);
       }
-      fieldValue = data;
+      fieldValue = serilazeData;
       break;
     case BYTES:
       fieldValue = ((ByteBuffer) fieldValue).array();
@@ -264,10 +286,12 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
         Schema unionSchema = fieldSchema.getTypes().get(schemaPos);
         fieldValue = serializeFieldValue(unionSchema, fieldValue);
       } else {
-        byte[] serilazeData = null;
         try {
-          @SuppressWarnings("rawtypes")
-          SpecificDatumWriter writer = getDatumWriter(fieldSchema);
+          SpecificDatumWriter writer = writerMap.get(fieldSchema);
+          if (writer == null) {
+            writer = new SpecificDatumWriter(fieldSchema);// ignore dirty bits
+            writerMap.put(fieldSchema, writer);
+          }
           serilazeData = IOUtils.serialize(writer, fieldValue);
         } catch (IOException e) {
           LOG.error(e.getMessage(), e);
@@ -279,16 +303,6 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       break;
     }
     return fieldValue;
-  }
-
-  private SpecificDatumWriter getDatumWriter(Schema fieldSchema) {
-    SpecificDatumWriter writer = writerMap.get(fieldSchema);
-    if (writer == null) {
-      writer = new SpecificDatumWriter(fieldSchema);// ignore dirty bits
-      writerMap.put(fieldSchema, writer);
-    }
-
-    return writer;
   }
 
   private int getUnionSchema(Object pValue, Schema pUnionSchema) {

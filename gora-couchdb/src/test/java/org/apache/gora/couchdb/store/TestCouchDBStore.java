@@ -18,21 +18,27 @@ package org.apache.gora.couchdb.store;
 
 import org.apache.avro.util.Utf8;
 import org.apache.gora.GoraCouchDBTestDriver;
+import org.apache.gora.couchdb.query.CouchDBQuery;
+import org.apache.gora.couchdb.query.CouchDBResult;
 import org.apache.gora.examples.generated.Employee;
 import org.apache.gora.examples.generated.WebPage;
+import org.apache.gora.filter.Filter;
+import org.apache.gora.query.Query;
+import org.apache.gora.query.Result;
 import org.apache.gora.store.DataStore;
 import org.apache.gora.store.DataStoreTestBase;
-import org.apache.hadoop.conf.Configuration;
 import org.junit.ClassRule;
 import org.junit.Test;
 import org.testcontainers.containers.GenericContainer;
+import org.ektorp.DocumentNotFoundException;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.*;
 
 /**
  * Tests extending {@link DataStoreTestBase}
@@ -86,4 +92,148 @@ public class TestCouchDBStore extends DataStoreTestBase {
     assertNotNull(storedPage);
     assertEquals(page.getUrl(), storedPage.getUrl());
   }
+
+  @Test(expected = DocumentNotFoundException.class)
+  public void testCreateAndDeleteSchema() throws IOException {
+    WebPage page = webPageStore.newPersistent();
+
+    // Write webpage data
+    page.setUrl(new Utf8("http://example.com"));
+    webPageStore.put("com.example/http", page);
+
+    assertEquals("WebPage isn't created.", page.getUrl(), webPageStore.get("com.example/http").getUrl());
+
+    webPageStore.deleteSchema();
+
+    final String message = "{\"error\":\"not_found\",\"reason\":\"no_db_file\"}";
+    try {
+      webPageStore.get("com.example/http");
+    } catch (DocumentNotFoundException e) {
+      assertTrue(e.getMessage().contains(message));
+      throw e;
+    }
+
+    fail("Schema isn't deleted");
+
+  }
+
+  @Test(expected = DocumentNotFoundException.class)
+  public void testDelete() throws IOException {
+    WebPage page = webPageStore.newPersistent();
+
+    // Write webpage data
+    page.setUrl(new Utf8("http://example.com"));
+    byte[] contentBytes = "example content in example.com".getBytes(Charset.defaultCharset());
+    ByteBuffer buff = ByteBuffer.wrap(contentBytes);
+    page.setContent(buff);
+    webPageStore.put("com.example/http", page);
+
+    WebPage storedPage = webPageStore.get("com.example/http");
+
+    assertNotNull(storedPage);
+    assertEquals(page.getUrl(), storedPage.getUrl());
+
+    webPageStore.delete("com.example/http");
+
+    final String message = "{\"error\":\"not_found\",\"reason\":\"deleted\"}";
+    try {
+      webPageStore.get("com.example/http");
+    } catch (DocumentNotFoundException e) {
+      assertTrue(e.getMessage().contains(message));
+      throw e;
+    }
+
+    fail("The data isn't deleted");
+
+  }
+
+  @Test(expected = DocumentNotFoundException.class)
+  public void testDeleteByQuery() throws IOException {
+
+    WebPage page = webPageStore.newPersistent();
+
+    // Write webpage data
+    page.setUrl(new Utf8("http://example.com"));
+    byte[] contentBytes = "example content in example.com".getBytes(Charset.defaultCharset());
+    ByteBuffer buff = ByteBuffer.wrap(contentBytes);
+    page.setContent(buff);
+    webPageStore.put("com.example/http", page);
+
+    WebPage storedPage = webPageStore.get("com.example/http");
+
+    assertNotNull(storedPage);
+    assertEquals(page.getUrl(), storedPage.getUrl());
+
+    final Query<String, WebPage> query = webPageStore.newQuery();
+    query.setKey("com.example/http");
+    webPageStore.deleteByQuery(query);
+
+    final String message = "{\"error\":\"not_found\",\"reason\":\"deleted\"}";
+    try {
+      webPageStore.get("com.example/http");
+    } catch (DocumentNotFoundException e) {
+      assertTrue(e.getMessage().contains(message));
+      throw e;
+    }
+
+    fail("The data isn't deleted");
+
+  }
+
+  @Test
+  public void testGetSchemaName() throws IOException {
+    assertEquals("WebPage", webPageStore.getSchemaName());
+    assertEquals("Employee", employeeStore.getSchemaName());
+  }
+
+  @Test
+  public void testSchemaExist() throws IOException {
+    assertTrue(webPageStore.schemaExists());
+    webPageStore.deleteSchema();
+    assertFalse(webPageStore.schemaExists());
+
+  }
+
+  private List<WebPage> generateWebPageTestDoc(int limit) {
+    final List<WebPage> list = new ArrayList<>();
+    final String exampleURL = "http://example.com";
+    String exampleContent = "example content in example.com";
+
+    WebPage page;
+
+    for (int i = 0; i < limit; i++) {
+      page = webPageStore.newPersistent();
+      page.setUrl(new Utf8(exampleURL + i));
+      exampleContent = exampleContent + i;
+      ByteBuffer buff = ByteBuffer.wrap(exampleContent.getBytes(Charset.defaultCharset()));
+      page.setContent(buff);
+      list.add(page);
+    }
+
+    return list;
+  }
+
+  @Test
+  public void testExecute() throws IOException {
+    final int allLimit = 100;
+    final List<WebPage> docList = generateWebPageTestDoc(allLimit);
+
+    for(WebPage page : docList) {
+      webPageStore.put(page.getUrl().toString(), page);
+    }
+
+    final Query<String, WebPage> query = webPageStore.newQuery();
+
+    int limit = 5;
+    query.setLimit(limit);
+    CouchDBResult<String,WebPage> result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
+    assertEquals(limit,result.getResultData().size());
+
+    limit = 50;
+    query.setLimit(limit);
+    result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
+    assertEquals(limit,result.getResultData().size());
+
+  }
+
 }

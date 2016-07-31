@@ -690,6 +690,7 @@ public class AccumuloStore<K,T extends PersistentBase> extends DataStoreBase<K,T
           }
           // continue like a regular top-level union
         case RECORD:
+          //FIXME duplicated code @see org.apache.gora.util.IOUtils#serialize()
           SpecificDatumWriter<Object> writer = new SpecificDatumWriter<>(field.schema());
           ByteArrayOutputStream os = new ByteArrayOutputStream();
           org.apache.avro.io.BinaryEncoder encoder = EncoderFactory.get().binaryEncoder(os, null);

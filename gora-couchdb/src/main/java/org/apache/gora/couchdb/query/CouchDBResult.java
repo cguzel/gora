@@ -78,4 +78,8 @@ public class CouchDBResult<K, T extends Persistent> extends ResultBase<K, T> {
       return 0;
     }
   }
+
+  public List<Map> getResultData() {
+    return result;
+  }
 }

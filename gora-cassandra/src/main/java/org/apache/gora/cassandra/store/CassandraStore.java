@@ -511,6 +511,7 @@ public class CassandraStore<K, T extends PersistentBase> extends DataStoreBase<K
           if (value instanceof PersistentBase) {
             PersistentBase persistentBase = (PersistentBase) value;            
             try {
+              //FIXME duplicated code @see org.apache.gora.util.IOUtils#serialize()
               byte[] byteValue = AvroSerializerUtil.serializer(persistentBase, schema);
               this.cassandraClient.addColumn(key, field.name(), byteValue);
             } catch (IOException e) {
