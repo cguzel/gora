@@ -27,7 +27,9 @@ import org.apache.gora.query.Query;
 import org.apache.gora.query.Result;
 import org.apache.gora.store.DataStore;
 import org.apache.gora.store.DataStoreTestBase;
+import org.apache.gora.store.DataStoreTestUtil;
 import org.junit.ClassRule;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.ektorp.DocumentNotFoundException;
@@ -86,6 +88,7 @@ public class TestCouchDBStore extends DataStoreTestBase {
     ByteBuffer buff = ByteBuffer.wrap(contentBytes);
     page.setContent(buff);
     webPageStore.put("com.example/http", page);
+    webPageStore.flush();
 
     WebPage storedPage = webPageStore.get("com.example/http");
 
@@ -221,6 +224,7 @@ public class TestCouchDBStore extends DataStoreTestBase {
     for(WebPage page : docList) {
       webPageStore.put(page.getUrl().toString(), page);
     }
+    webPageStore.close();
 
     final Query<String, WebPage> query = webPageStore.newQuery();
 
@@ -233,6 +237,15 @@ public class TestCouchDBStore extends DataStoreTestBase {
     query.setLimit(limit);
     result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
     assertEquals(limit,result.getResultData().size());
+
+  }
+
+  /**
+   * By design, you cannot update a CouchDB document blindly, you can only attempt to update a specific revision of a document.
+   */
+  @Test
+  @Ignore
+  public void testUpdate() throws Exception {
 
   }
 

@@ -19,8 +19,10 @@
 package org.apache.gora.couchdb.store;
 
 import com.google.common.primitives.Ints;
+import com.sun.corba.se.spi.ior.ObjectId;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
+import org.apache.avro.io.BinaryDecoder;
 import org.apache.avro.specific.SpecificDatumReader;
 import org.apache.avro.specific.SpecificDatumWriter;
 import org.apache.avro.util.Utf8;
@@ -29,6 +31,9 @@ import org.apache.gora.couchdb.query.CouchDBQuery;
 import org.apache.gora.couchdb.query.CouchDBResult;
 import org.apache.gora.couchdb.util.GoraStdObjectMapperFactory;
 import org.apache.gora.persistency.Persistent;
+import org.apache.gora.persistency.impl.BeanFactoryImpl;
+import org.apache.gora.persistency.impl.DirtyListWrapper;
+import org.apache.gora.persistency.impl.DirtyMapWrapper;
 import org.apache.gora.persistency.impl.PersistentBase;
 import org.apache.gora.query.PartitionQuery;
 import org.apache.gora.query.Query;
@@ -37,6 +42,7 @@ import org.apache.gora.query.impl.PartitionQueryImpl;
 import org.apache.gora.store.DataStoreFactory;
 import org.apache.gora.store.impl.DataStoreBase;
 import org.apache.gora.util.AvroUtils;
+import org.apache.gora.util.ClassLoadingUtils;
 import org.apache.gora.util.IOUtils;
 import org.ektorp.CouchDbConnector;
 import org.ektorp.CouchDbInstance;
@@ -73,8 +79,17 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
    */
   public static final String DEFAULT_MAPPING_FILE = "gora-couchdb-mapping.xml";
 
-  public static final ConcurrentHashMap<Schema, SpecificDatumReader<?>> readerMap = new ConcurrentHashMap<>();
-  public static final ConcurrentHashMap<Schema, SpecificDatumWriter<?>> writerMap = new ConcurrentHashMap<>();
+  private static final ConcurrentHashMap<Schema, SpecificDatumReader<?>> readerMap = new ConcurrentHashMap<>();
+  private static final ConcurrentHashMap<Schema, SpecificDatumWriter<?>> writerMap = new ConcurrentHashMap<>();
+
+  private static List<Object> bulkDocs = new ArrayList<>();
+  /**
+   * The values are Avro fields pending to be stored.
+   * <p>
+   * We want to iterate over the keys in insertion order.
+   * We don't want to lock the entire collection before iterating over the keys,
+   * since in the meantime other threads are adding entries to the map.
+   */
 
   /**
    * Default schema index with value "0" used when AVRO Union data types are stored
@@ -221,9 +236,8 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
    */
   @Override
   public void put(K key, T obj) {
-
-    final Map<String, Object> doc = new HashMap<>();
-    doc.put("_id", key.toString());
+    final Map<String, Object> buffer = Collections.synchronizedMap(new LinkedHashMap<String, Object>());
+    buffer.put("_id", key);
 
     Schema schema = obj.getSchema();
 
@@ -239,59 +253,57 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
       // check if field has a nested structure (array, map, record or union)
       fieldValue = serializeFieldValue(fieldSchema, fieldValue);
-      doc.put(field.name(), fieldValue);
+      buffer.put(field.name(), fieldValue);
     }
-    db.update(doc);
+    bulkDocs.add(buffer);
 
-  }
-
-  private Object convertFromBytes(byte[] bytes) throws IOException, ClassNotFoundException {
-    try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
-         ObjectInput in = new ObjectInputStream(bis)) {
-      return in.readObject();
-    }
   }
 
   private Object serializeFieldValue(Schema fieldSchema, Object fieldValue) {
-    byte[] serilazeData = null;
+    final Map<String, Object> newMap = new HashMap<>();
 
     switch (fieldSchema.getType()) {
     case MAP:
-    case ARRAY:
-    case RECORD:
-      try {
-        SpecificDatumWriter writer = writerMap.get(fieldSchema);
-        if (writer == null) {
-          writer = new SpecificDatumWriter(fieldSchema);// ignore dirty bits
-          writerMap.put(fieldSchema, writer);
-        }
-        serilazeData = IOUtils.serialize(writer, fieldValue);
-      } catch (IOException e) {
-        LOG.error(e.getMessage(), e);
+      final Map<?, ?> fieldMap = (Map<?, ?>) fieldValue;
+      for (Object key : fieldMap.keySet()) {
+        newMap.put(key.toString(), fieldMap.get(key).toString());
       }
-      fieldValue = serilazeData;
+      fieldValue = newMap;
+      break;
+    case ARRAY:
+      break;
+    case RECORD:
+
+      PersistentBase persistent = (PersistentBase) fieldValue;
+
+      for (Field member : fieldSchema.getFields()) {
+        Schema memberSchema = member.schema();
+        Object memberValue = persistent.get(member.pos());
+        newMap.put(member.name(), serializeFieldValue(memberSchema, memberValue));
+      }
+      fieldValue = newMap;
       break;
     case BYTES:
-      fieldValue = ((ByteBuffer) fieldValue).array();
+      fieldValue = new String(((ByteBuffer) fieldValue).array());
       break;
     case ENUM:
     case STRING:
       fieldValue = fieldValue.toString();
       break;
     case UNION:
-      // If field's schema is null and one type, we do undertake serialization.
-      // All other types are serialized.
       if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
         int schemaPos = getUnionSchema(fieldValue, fieldSchema);
         Schema unionSchema = fieldSchema.getTypes().get(schemaPos);
         fieldValue = serializeFieldValue(unionSchema, fieldValue);
       } else {
+        byte[] serilazeData = null;
         try {
           SpecificDatumWriter writer = writerMap.get(fieldSchema);
           if (writer == null) {
             writer = new SpecificDatumWriter(fieldSchema);// ignore dirty bits
             writerMap.put(fieldSchema, writer);
           }
+
           serilazeData = IOUtils.serialize(writer, fieldValue);
         } catch (IOException e) {
           LOG.error(e.getMessage(), e);
@@ -405,8 +417,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
    * @return a persistence class instance which content was deserialized
    * @throws IOException
    */
-  public T newInstance(Map<String, Object> result, String[] fields)
-      throws IOException {
+  public T newInstance(Map<String, Object> result, String[] fields) throws IOException {
     if (result == null)
       return null;
 
@@ -418,7 +429,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       }
       final Field field = fieldMap.get(f);
       final Schema fieldSchema = field.schema();
-      final Object resultObj = deserializeFieldValue(field, fieldSchema, result.get(field.name()), persistent);
+      final Object resultObj = fromDBObject(fieldSchema, field, field.name(), result);
       persistent.put(field.pos(), resultObj);
       persistent.setDirty(field.pos());
     }
@@ -428,61 +439,123 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
   }
 
-  private Object deserializeFieldValue(Field field, Schema fieldSchema, Object value, T persistent) throws IOException {
-    Object fieldValue = null;
+  private Object fromCouchDBRecord(final Schema fieldSchema, final String docf, final Object value) {
+    final Object innerValue = ((Map) value).get(docf); //FIXME
+
+    Class<?> clazz = null;
+    try {
+      clazz = ClassLoadingUtils.loadClass(fieldSchema.getFullName());
+    } catch (ClassNotFoundException e) {
+      //FIXME add log
+    }
+    PersistentBase record = (PersistentBase) new BeanFactoryImpl(keyClass, clazz).newPersistent();
+
+    for (Field recField : fieldSchema.getFields()) {
+      Schema innerSchema = recField.schema();
+
+      record.put(recField.pos(), fromDBObject(innerSchema, recField, recField.name(), innerValue));
+    }
+    return record;
+  }
+
+  private Object fromCouchDBMap(final Schema fieldSchema, final Field field, final Map<String, Object> map) {
+
+    final Map<Utf8, Object> rmap = new HashMap<>();
+    if (map == null) {
+      return new DirtyMapWrapper(rmap);
+    }
+    for (Map.Entry<String, Object> e : map.entrySet()) {
+      Schema innerSchema = fieldSchema.getValueType();
+      ;
+      Object o = fromDBObject(innerSchema, field, e.getKey(), e.getValue());
+      rmap.put(new Utf8(e.getKey()), o);
+    }
+    return new DirtyMapWrapper<>(rmap);
+  }
+
+  private Object fromCouchDBUnion(final Schema fieldSchema, final Field field, final String docf, final Object value) {
+
+    Object result = null;
+    final Schema unionSchema;
+
+    if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
+      Schema.Type type0 = fieldSchema.getTypes().get(0).getType();
+      Schema.Type type1 = fieldSchema.getTypes().get(1).getType();
+
+      // Check if types are different and there's a "null", like
+      // ["null","type"] or ["type","null"]
+      if (!type0.equals(type1)) {
+        if (type0.equals(Schema.Type.NULL))
+          unionSchema = fieldSchema.getTypes().get(1);
+        else
+          unionSchema = fieldSchema.getTypes().get(0);
+      } else {
+        unionSchema = fieldSchema.getTypes().get(0);
+      }
+      result = fromDBObject(unionSchema, field, docf, ((Map) value).get(docf));
+    } else {
+      SpecificDatumReader unionReader = getDatumReader(fieldSchema);
+      try {
+        result = IOUtils.deserialize((byte[]) value, unionReader, value);
+      } catch (IOException e) {
+        e.printStackTrace(); //FIXME add log
+      }
+    }
+
+    return result;
+  }
+
+  private Object fromCouchDBList(final Schema fieldSchema, final Field field, final String docf, final Object value) {
+    List<Object> list = (List<Object>) value;
+    List<Object> rlist = new ArrayList<>();
+    if (list == null) {
+      return new DirtyListWrapper(rlist);
+    }
+
+    for (Object item : list) {
+
+      Object o = fromDBObject(fieldSchema.getElementType(), field, "item", value);
+      rlist.add(o);
+    }
+    return new DirtyListWrapper<>(rlist);
+  }
+
+  private Object fromDBObject(final Schema fieldSchema, final Field field, final String docf, final Object value) {
+    Object result = null;
     switch (fieldSchema.getType()) {
     case MAP:
+      Map<String, Object> map = (Map<String, Object>) ((Map<String, Object>) value).get(docf); //FIXME
+      result = fromCouchDBMap(fieldSchema, field, map);
+      break;
     case ARRAY:
+      result = fromCouchDBList(fieldSchema, field, docf, value);
+      break;
     case RECORD:
-      SpecificDatumReader reader = getDatumReader(fieldSchema);
-      fieldValue = IOUtils.deserialize((byte[]) value, reader, persistent.get(field.pos()));
-      break;
-    case ENUM:
-      fieldValue = AvroUtils.getEnumValue(fieldSchema, (String) value);
-      break;
-    case BYTES:
-      ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
-      fieldValue = ByteBuffer.wrap(byteOut.toByteArray());
-      break;
-    case STRING:
-      fieldValue = new Utf8(value.toString());
-      break;
-    case LONG:
-      fieldValue = Long.valueOf(value.toString());
-      break;
-    case INT:
-      fieldValue = Integer.valueOf(value.toString());
-      break;
-    case DOUBLE:
-      fieldValue = Double.valueOf(value.toString());
+      result = fromCouchDBRecord(fieldSchema, docf, value);
       break;
     case UNION:
-      if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
-        Schema.Type type0 = fieldSchema.getTypes().get(0).getType();
-        Schema.Type type1 = fieldSchema.getTypes().get(1).getType();
-
-        // Check if types are different and there's a "null", like
-        // ["null","type"] or ["type","null"]
-        if (!type0.equals(type1)) {
-          if (type0.equals(Schema.Type.NULL))
-            fieldSchema = fieldSchema.getTypes().get(1);
-          else
-            fieldSchema = fieldSchema.getTypes().get(0);
-        } else {
-          fieldSchema = fieldSchema.getTypes().get(0);
-        }
-        fieldValue = deserializeFieldValue(field, fieldSchema, value,
-            persistent);
-      } else {
-        SpecificDatumReader unionReader = getDatumReader(fieldSchema);
-        fieldValue = IOUtils.deserialize((byte[]) value, unionReader, persistent.get(field.pos()));
-        break;
-      }
+      result = fromCouchDBUnion(fieldSchema, field, docf, value);
       break;
+    case ENUM:
+      result = AvroUtils.getEnumValue(fieldSchema, (String) value);
+      break;
+    case BYTES:
+      result = ByteBuffer.wrap(((String) value).getBytes());
+      break;
+    case STRING:
+      result = new Utf8(value.toString());
+      break;
+    case LONG:
+    case DOUBLE:
+    case INT:
+      //      result = Integer.valueOf(value.toString());
+      result = ((Map) value).get(docf);
+      break;
+
     default:
-      fieldValue = value;
+      result = value;
     }
-    return fieldValue;
+    return result;
   }
 
   private SpecificDatumReader getDatumReader(Schema fieldSchema) {
@@ -508,10 +581,13 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
   @Override
   public void flush() {
-    db.flushBulkBuffer();     //FIXME is true?
+    db.executeBulk(bulkDocs);
+    bulkDocs.clear();
+    db.flushBulkBuffer();
   }
 
   @Override
   public void close() {
+    flush();
   }
 }
