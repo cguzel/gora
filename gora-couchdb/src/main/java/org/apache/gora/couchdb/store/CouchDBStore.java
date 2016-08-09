@@ -19,10 +19,8 @@
 package org.apache.gora.couchdb.store;
 
 import com.google.common.primitives.Ints;
-import com.sun.corba.se.spi.ior.ObjectId;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
-import org.apache.avro.io.BinaryDecoder;
 import org.apache.avro.specific.SpecificDatumReader;
 import org.apache.avro.specific.SpecificDatumWriter;
 import org.apache.avro.util.Utf8;
@@ -252,25 +250,32 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       Schema fieldSchema = field.schema();
 
       // check if field has a nested structure (array, map, record or union)
-      fieldValue = serializeFieldValue(fieldSchema, fieldValue);
+      fieldValue = toDBObject(fieldSchema, fieldValue);
       buffer.put(field.name(), fieldValue);
     }
     bulkDocs.add(buffer);
 
   }
 
-  private Object serializeFieldValue(Schema fieldSchema, Object fieldValue) {
+  private Object toDBObject(Schema fieldSchema, final Object fieldValue) {
     final Map<String, Object> newMap = new HashMap<>();
+
+    Object result = null;
 
     switch (fieldSchema.getType()) {
     case MAP:
       final Map<?, ?> fieldMap = (Map<?, ?>) fieldValue;
       for (Object key : fieldMap.keySet()) {
-        newMap.put(key.toString(), fieldMap.get(key).toString());
+        newMap.put(key.toString(), fieldMap.get(key).toString());   // FIXME
       }
-      fieldValue = newMap;
+      result = newMap;
       break;
     case ARRAY:
+      List<Object> list = new LinkedList<>();
+      for (Object obj : (List<Object>) fieldValue) {
+        list.add(toDBObject(fieldSchema.getElementType(), obj));
+      }
+      result = list;
       break;
     case RECORD:
 
@@ -279,22 +284,22 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       for (Field member : fieldSchema.getFields()) {
         Schema memberSchema = member.schema();
         Object memberValue = persistent.get(member.pos());
-        newMap.put(member.name(), serializeFieldValue(memberSchema, memberValue));
+        newMap.put(member.name(), toDBObject(memberSchema, memberValue));
       }
-      fieldValue = newMap;
+      result = newMap;
       break;
     case BYTES:
-      fieldValue = new String(((ByteBuffer) fieldValue).array());
+      result = new String(((ByteBuffer) fieldValue).array());
       break;
     case ENUM:
     case STRING:
-      fieldValue = fieldValue.toString();
+      result = fieldValue.toString();
       break;
     case UNION:
       if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
         int schemaPos = getUnionSchema(fieldValue, fieldSchema);
         Schema unionSchema = fieldSchema.getTypes().get(schemaPos);
-        fieldValue = serializeFieldValue(unionSchema, fieldValue);
+        result = toDBObject(unionSchema, fieldValue);
       } else {
         byte[] serilazeData = null;
         try {
@@ -308,13 +313,14 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
         } catch (IOException e) {
           LOG.error(e.getMessage(), e);
         }
-        fieldValue = serilazeData;
+        result = serilazeData;
       }
       break;
     default:
+      result = fieldValue;
       break;
     }
-    return fieldValue;
+    return result;
   }
 
   private int getUnionSchema(Object pValue, Schema pUnionSchema) {
@@ -514,7 +520,7 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
     for (Object item : list) {
 
-      Object o = fromDBObject(fieldSchema.getElementType(), field, "item", value);
+      Object o = fromDBObject(fieldSchema.getElementType(), field, "item", item);
       rlist.add(o);
     }
     return new DirtyListWrapper<>(rlist);
@@ -528,7 +534,8 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       result = fromCouchDBMap(fieldSchema, field, map);
       break;
     case ARRAY:
-      result = fromCouchDBList(fieldSchema, field, docf, value);
+      List<Object> list = (List<Object>) ((Map<String, Object>) value).get(docf);
+      result = fromCouchDBList(fieldSchema, field, docf, list);
       break;
     case RECORD:
       result = fromCouchDBRecord(fieldSchema, docf, value);
