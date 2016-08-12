@@ -41,7 +41,6 @@ import org.apache.gora.store.DataStoreFactory;
 import org.apache.gora.store.impl.DataStoreBase;
 import org.apache.gora.util.AvroUtils;
 import org.apache.gora.util.ClassLoadingUtils;
-import org.apache.gora.util.IOUtils;
 import org.ektorp.CouchDbConnector;
 import org.ektorp.CouchDbInstance;
 import org.ektorp.ViewQuery;
@@ -54,7 +53,7 @@ import org.ektorp.support.CouchDbDocument;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.*;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -216,12 +215,12 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
   @Override
   public T get(final K key, final String[] fields) {
 
-    final Map result = db.get(Map.class, key.toString());
-
+    final Map result;
     try {
+      result = db.get(Map.class, key.toString());
       return newInstance(result, getFieldsToQuery(fields));
-    } catch (IOException e) {
-      LOG.error(e.getMessage(), e);
+    } catch (Exception e) {
+      LOG.info(e.getMessage(), e);
       return null;
     }
   }
@@ -258,13 +257,16 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
   }
 
   private Object toDBObject(Schema fieldSchema, final Object fieldValue) {
-    final Map<String, Object> newMap = new HashMap<>();
+    final Map<String, Object> newMap = new LinkedHashMap<>();
 
     Object result = null;
 
     switch (fieldSchema.getType()) {
     case MAP:
       final Map<?, ?> fieldMap = (Map<?, ?>) fieldValue;
+      if (fieldValue == null) {
+        return null;
+      }
       for (Object key : fieldMap.keySet()) {
         newMap.put(key.toString(), fieldMap.get(key).toString());   // FIXME
       }
@@ -279,14 +281,15 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       break;
     case RECORD:
 
-      PersistentBase persistent = (PersistentBase) fieldValue;
-
-      for (Field member : fieldSchema.getFields()) {
-        Schema memberSchema = member.schema();
-        Object memberValue = persistent.get(member.pos());
-        newMap.put(member.name(), toDBObject(memberSchema, memberValue));
+      final PersistentBase persistent = (PersistentBase) fieldValue;
+      if (persistent != null) {
+        for (Field member : fieldSchema.getFields()) {
+          Schema memberSchema = member.schema();
+          Object memberValue = persistent.get(member.pos());
+          newMap.put(member.name(), toDBObject(memberSchema, memberValue));
+        }
+        result = newMap;
       }
-      result = newMap;
       break;
     case BYTES:
       result = new String(((ByteBuffer) fieldValue).array());
@@ -296,24 +299,22 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       result = fieldValue.toString();
       break;
     case UNION:
-      if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
-        int schemaPos = getUnionSchema(fieldValue, fieldSchema);
-        Schema unionSchema = fieldSchema.getTypes().get(schemaPos);
-        result = toDBObject(unionSchema, fieldValue);
-      } else {
-        byte[] serilazeData = null;
-        try {
-          SpecificDatumWriter writer = writerMap.get(fieldSchema);
-          if (writer == null) {
-            writer = new SpecificDatumWriter(fieldSchema);// ignore dirty bits
-            writerMap.put(fieldSchema, writer);
-          }
+      Schema.Type type0 = fieldSchema.getTypes().get(0).getType();
+      Schema.Type type1 = fieldSchema.getTypes().get(1).getType();
 
-          serilazeData = IOUtils.serialize(writer, fieldValue);
-        } catch (IOException e) {
-          LOG.error(e.getMessage(), e);
-        }
-        result = serilazeData;
+      // Check if types are different and there's a "null", like ["null","type"]
+      // or ["type","null"]
+      if (!type0.equals(type1)
+          && (type0.equals(Schema.Type.NULL) || type1.equals(Schema.Type.NULL))) {
+        Schema innerSchema = fieldSchema.getTypes().get(1);
+        LOG.debug(
+            "Transform value to DBObject (UNION), schemaType:{}, type1:{}, storeType:{}",
+            new Object[] { innerSchema.getType(), type1 });
+        // Deserialize as if schema was ["type"]
+        result = toDBObject(innerSchema, fieldValue);
+      } else {
+        throw new IllegalStateException(
+            "MongoStore doesn't support 3 types union field yet. Please update your mapping");
       }
       break;
     default:
@@ -362,6 +363,9 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
    */
   @Override
   public boolean delete(K key) {
+    if (key == null) {
+      return false;
+    }
     final String keyString = key.toString();
     final Map<String, Object> referenceData = db.get(Map.class, keyString);
     return StringUtils.isNotEmpty(db.delete(keyString, referenceData.get("_rev").toString()));
@@ -398,6 +402,8 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
     final ViewQuery viewQuery = new ViewQuery()
         .allDocs()
         .includeDocs(true)
+        .startKey(query.getStartKey())
+        .endKey(query.getEndKey())
         .limit(Ints.checkedCast(query.getLimit())); //FIXME GORA have long value but ektorp client use integer
 
     CouchDBResult<K, T> couchDBResult = new CouchDBResult<>(this, query, db.queryView(viewQuery, Map.class));
@@ -429,13 +435,18 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
     T persistent = newPersistent();
 
-    for (String f : result.keySet()) {
-      if (f.equals("_id") || f.equals("_rev")) {
+    // Populate each field
+    for (String fieldName : fields) {
+      if (result.get(fieldName) == null) {
         continue;
       }
-      final Field field = fieldMap.get(f);
+      final Field field = fieldMap.get(fieldName);
       final Schema fieldSchema = field.schema();
-      final Object resultObj = fromDBObject(fieldSchema, field, field.name(), result);
+
+      LOG.debug("Load from DBObject (MAIN), field:{}, schemaType:{}, docField:{}",
+          new Object[] { field.name(), fieldSchema.getType(), fieldName });
+
+      final Object resultObj = fromDBObject(fieldSchema, field, fieldName, result);
       persistent.put(field.pos(), resultObj);
       persistent.setDirty(field.pos());
     }
@@ -447,6 +458,9 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
   private Object fromCouchDBRecord(final Schema fieldSchema, final String docf, final Object value) {
     final Object innerValue = ((Map) value).get(docf); //FIXME
+    if (innerValue == null) {
+      return null;
+    }
 
     Class<?> clazz = null;
     try {
@@ -481,33 +495,24 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
 
   private Object fromCouchDBUnion(final Schema fieldSchema, final Field field, final String docf, final Object value) {
 
-    Object result = null;
-    final Schema unionSchema;
+    Object result;// schema [type0, type1]
+    Schema.Type type0 = fieldSchema.getTypes().get(0).getType();
+    Schema.Type type1 = fieldSchema.getTypes().get(1).getType();
 
-    if (fieldSchema.getTypes().size() == 2 && isNullable(fieldSchema)) {
-      Schema.Type type0 = fieldSchema.getTypes().get(0).getType();
-      Schema.Type type1 = fieldSchema.getTypes().get(1).getType();
-
-      // Check if types are different and there's a "null", like
-      // ["null","type"] or ["type","null"]
-      if (!type0.equals(type1)) {
-        if (type0.equals(Schema.Type.NULL))
-          unionSchema = fieldSchema.getTypes().get(1);
-        else
-          unionSchema = fieldSchema.getTypes().get(0);
-      } else {
-        unionSchema = fieldSchema.getTypes().get(0);
-      }
-      result = fromDBObject(unionSchema, field, docf, ((Map) value).get(docf));
+    // Check if types are different and there's a "null", like ["null","type"]
+    // or ["type","null"]
+    if (!type0.equals(type1)
+        && (type0.equals(Schema.Type.NULL) || type1.equals(Schema.Type.NULL))) {
+      Schema innerSchema = fieldSchema.getTypes().get(1);
+      LOG.debug(
+          "Load from DBObject (UNION), schemaType:{}, docField:{}, storeType:{}",
+          new Object[] { innerSchema.getType(), docf });
+      // Deserialize as if schema was ["type"]
+      result = fromDBObject(innerSchema, field, docf, value);
     } else {
-      SpecificDatumReader unionReader = getDatumReader(fieldSchema);
-      try {
-        result = IOUtils.deserialize((byte[]) value, unionReader, value);
-      } catch (IOException e) {
-        e.printStackTrace(); //FIXME add log
-      }
+      throw new IllegalStateException(
+          "CouchDBStore doesn't support 3 types union field yet. Please update your mapping");
     }
-
     return result;
   }
 
@@ -527,7 +532,12 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
   }
 
   private Object fromDBObject(final Schema fieldSchema, final Field field, final String docf, final Object value) {
+    if (value == null) { //FIXME
+      return null;
+    }
+
     Object result = null;
+
     switch (fieldSchema.getType()) {
     case MAP:
       Map<String, Object> map = (Map<String, Object>) ((Map<String, Object>) value).get(docf); //FIXME
@@ -544,13 +554,27 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       result = fromCouchDBUnion(fieldSchema, field, docf, value);
       break;
     case ENUM:
-      result = AvroUtils.getEnumValue(fieldSchema, (String) value);
+      if (value instanceof Map) {
+        result = AvroUtils.getEnumValue(fieldSchema, (String) ((Map) value).get(docf));
+      } else {
+        result = AvroUtils.getEnumValue(fieldSchema, (String) value);
+      }
       break;
     case BYTES:
-      result = ByteBuffer.wrap(((String) value).getBytes());
+      byte[] array = null;
+      if (value instanceof Map) {
+        array = ((String) ((Map) value).get(docf)).getBytes();
+      } else {
+        array = ((String) value).getBytes();
+      }
+      result = ByteBuffer.wrap(array);
       break;
     case STRING:
-      result = new Utf8(value.toString());
+      if (value instanceof Map) {
+        result = new Utf8((String) ((Map) value).get(docf));
+      } else {
+        result = new Utf8((String) value);
+      }
       break;
     case LONG:
     case DOUBLE:

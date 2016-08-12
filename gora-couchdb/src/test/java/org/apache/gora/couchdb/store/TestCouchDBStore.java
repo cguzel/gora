@@ -18,21 +18,16 @@ package org.apache.gora.couchdb.store;
 
 import org.apache.avro.util.Utf8;
 import org.apache.gora.GoraCouchDBTestDriver;
-import org.apache.gora.couchdb.query.CouchDBQuery;
 import org.apache.gora.couchdb.query.CouchDBResult;
 import org.apache.gora.examples.generated.Employee;
 import org.apache.gora.examples.generated.WebPage;
-import org.apache.gora.filter.Filter;
 import org.apache.gora.query.Query;
-import org.apache.gora.query.Result;
 import org.apache.gora.store.DataStore;
 import org.apache.gora.store.DataStoreTestBase;
-import org.apache.gora.store.DataStoreTestUtil;
 import org.junit.ClassRule;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.testcontainers.containers.GenericContainer;
-import org.ektorp.DocumentNotFoundException;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -96,31 +91,23 @@ public class TestCouchDBStore extends DataStoreTestBase {
     assertEquals(page.getUrl(), storedPage.getUrl());
   }
 
-  @Test(expected = DocumentNotFoundException.class)
+  @Test
   public void testCreateAndDeleteSchema() throws IOException {
     WebPage page = webPageStore.newPersistent();
 
     // Write webpage data
     page.setUrl(new Utf8("http://example.com"));
     webPageStore.put("com.example/http", page);
+    webPageStore.flush();
 
     assertEquals("WebPage isn't created.", page.getUrl(), webPageStore.get("com.example/http").getUrl());
 
     webPageStore.deleteSchema();
 
-    final String message = "{\"error\":\"not_found\",\"reason\":\"no_db_file\"}";
-    try {
-      webPageStore.get("com.example/http");
-    } catch (DocumentNotFoundException e) {
-      assertTrue(e.getMessage().contains(message));
-      throw e;
-    }
-
-    fail("Schema isn't deleted");
-
+    assertNull(webPageStore.get("com.example/http"));
   }
 
-  @Test(expected = DocumentNotFoundException.class)
+  @Test
   public void testDelete() throws IOException {
     WebPage page = webPageStore.newPersistent();
 
@@ -130,6 +117,7 @@ public class TestCouchDBStore extends DataStoreTestBase {
     ByteBuffer buff = ByteBuffer.wrap(contentBytes);
     page.setContent(buff);
     webPageStore.put("com.example/http", page);
+    webPageStore.flush();
 
     WebPage storedPage = webPageStore.get("com.example/http");
 
@@ -138,19 +126,11 @@ public class TestCouchDBStore extends DataStoreTestBase {
 
     webPageStore.delete("com.example/http");
 
-    final String message = "{\"error\":\"not_found\",\"reason\":\"deleted\"}";
-    try {
-      webPageStore.get("com.example/http");
-    } catch (DocumentNotFoundException e) {
-      assertTrue(e.getMessage().contains(message));
-      throw e;
-    }
-
-    fail("The data isn't deleted");
+    assertNull(webPageStore.get("com.example/http"));
 
   }
 
-  @Test(expected = DocumentNotFoundException.class)
+  @Test
   public void testDeleteByQuery() throws IOException {
 
     WebPage page = webPageStore.newPersistent();
@@ -161,6 +141,7 @@ public class TestCouchDBStore extends DataStoreTestBase {
     ByteBuffer buff = ByteBuffer.wrap(contentBytes);
     page.setContent(buff);
     webPageStore.put("com.example/http", page);
+    webPageStore.flush();
 
     WebPage storedPage = webPageStore.get("com.example/http");
 
@@ -171,16 +152,7 @@ public class TestCouchDBStore extends DataStoreTestBase {
     query.setKey("com.example/http");
     webPageStore.deleteByQuery(query);
 
-    final String message = "{\"error\":\"not_found\",\"reason\":\"deleted\"}";
-    try {
-      webPageStore.get("com.example/http");
-    } catch (DocumentNotFoundException e) {
-      assertTrue(e.getMessage().contains(message));
-      throw e;
-    }
-
-    fail("The data isn't deleted");
-
+    assertNull(webPageStore.get("com.example/http"));
   }
 
   @Test
@@ -221,7 +193,7 @@ public class TestCouchDBStore extends DataStoreTestBase {
     final int allLimit = 100;
     final List<WebPage> docList = generateWebPageTestDoc(allLimit);
 
-    for(WebPage page : docList) {
+    for (WebPage page : docList) {
       webPageStore.put(page.getUrl().toString(), page);
     }
     webPageStore.close();
@@ -230,13 +202,13 @@ public class TestCouchDBStore extends DataStoreTestBase {
 
     int limit = 5;
     query.setLimit(limit);
-    CouchDBResult<String,WebPage> result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
-    assertEquals(limit,result.getResultData().size());
+    CouchDBResult<String, WebPage> result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
+    assertEquals(limit, result.getResultData().size());
 
     limit = 50;
     query.setLimit(limit);
     result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
-    assertEquals(limit,result.getResultData().size());
+    assertEquals(limit, result.getResultData().size());
 
   }
 
@@ -247,6 +219,18 @@ public class TestCouchDBStore extends DataStoreTestBase {
   @Ignore
   public void testUpdate() throws Exception {
 
+  }
+
+  @Ignore("CouchDBStore doesn't support 3 types union field yet")
+  @Override
+  public void testGet3UnionField() throws Exception {
+    // CouchDBStore doesn't support 3 types union field yet
+  }
+
+  @Ignore("Skip until GORA-66 is fixed: need better semantic for end/start keys")
+  @Override
+  public void testDeleteByQueryFields() throws IOException {
+    // Skip until GORA-66 is fixed: need better semantic for end/start keys
   }
 
 }
