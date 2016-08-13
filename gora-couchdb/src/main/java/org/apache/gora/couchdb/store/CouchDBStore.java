@@ -21,8 +21,6 @@ package org.apache.gora.couchdb.store;
 import com.google.common.primitives.Ints;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
-import org.apache.avro.specific.SpecificDatumReader;
-import org.apache.avro.specific.SpecificDatumWriter;
 import org.apache.avro.util.Utf8;
 import org.apache.commons.lang.StringUtils;
 import org.apache.gora.couchdb.query.CouchDBQuery;
@@ -56,7 +54,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Implementation of a CouchDB data store to be used by gora.
@@ -76,22 +73,15 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
    */
   public static final String DEFAULT_MAPPING_FILE = "gora-couchdb-mapping.xml";
 
-  private static final ConcurrentHashMap<Schema, SpecificDatumReader<?>> readerMap = new ConcurrentHashMap<>();
-  private static final ConcurrentHashMap<Schema, SpecificDatumWriter<?>> writerMap = new ConcurrentHashMap<>();
-
-  private static List<Object> bulkDocs = new ArrayList<>();
-  /**
-   * The values are Avro fields pending to be stored.
-   * <p>
-   * We want to iterate over the keys in insertion order.
-   * We don't want to lock the entire collection before iterating over the keys,
-   * since in the meantime other threads are adding entries to the map.
-   */
-
   /**
    * Default schema index with value "0" used when AVRO Union data types are stored
    */
   public static final int DEFAULT_UNION_SCHEMA = 0;
+
+  /**
+   * for bulk document operations
+   */
+  private final List<Object> bulkDocs = new ArrayList<>();
 
   /**
    * Mapping definition for CouchDB
@@ -364,7 +354,9 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
   @Override
   public boolean delete(K key) {
     if (key == null) {
-      return false;
+      deleteSchema();
+      createSchema();
+      return true;
     }
     final String keyString = key.toString();
     final Map<String, Object> referenceData = db.get(Map.class, keyString);
@@ -380,7 +372,35 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
    */
   @Override
   public long deleteByQuery(Query<K, T> query) {
-    return delete(query.getKey()) ? 1 : 0;
+
+    final K key = query.getKey();
+    final K startKey = query.getStartKey();
+    final K endKey = query.getEndKey();
+
+    if (key == null && startKey == null && endKey == null) {
+      deleteSchema();
+      createSchema();
+      return -1;
+    } else {
+      final ViewQuery viewQuery = new ViewQuery()
+          .allDocs()
+          .includeDocs(true)
+          .key(key)
+          .startKey(startKey)
+          .endKey(endKey);
+
+      final List<Map> result = db.queryView(viewQuery, Map.class);
+      final Map<String, List<String>> revisionsToPurge = new HashMap<>();
+
+      for (Map map : result) {
+        final List<String> revisions = new ArrayList<>();
+        String keyString = map.get("_id").toString();
+        String rev = map.get("_rev").toString();
+        revisions.add(rev);
+        revisionsToPurge.put(keyString, revisions);
+      }
+      return db.purge(revisionsToPurge).getPurged().size();
+    }
   }
 
   /**
@@ -587,27 +607,6 @@ public class CouchDBStore<K, T extends PersistentBase> extends DataStoreBase<K, 
       result = value;
     }
     return result;
-  }
-
-  private SpecificDatumReader getDatumReader(Schema fieldSchema) {
-    SpecificDatumReader<?> reader = readerMap.get(fieldSchema);
-    if (reader == null) {
-      reader = new SpecificDatumReader(fieldSchema);// ignore dirty bits
-      final SpecificDatumReader localReader = readerMap.putIfAbsent(fieldSchema, reader);
-      if (localReader != null) {
-        reader = localReader;
-      }
-    }
-    return reader;
-  }
-
-  private boolean isNullable(Schema unionSchema) {
-    for (Schema innerSchema : unionSchema.getTypes()) {
-      if (innerSchema.getType().equals(Schema.Type.NULL)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   @Override

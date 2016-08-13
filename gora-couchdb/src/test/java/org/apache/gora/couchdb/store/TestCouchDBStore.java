@@ -19,6 +19,7 @@ package org.apache.gora.couchdb.store;
 import org.apache.avro.util.Utf8;
 import org.apache.gora.GoraCouchDBTestDriver;
 import org.apache.gora.couchdb.query.CouchDBResult;
+import org.apache.gora.examples.WebPageDataCreator;
 import org.apache.gora.examples.generated.Employee;
 import org.apache.gora.examples.generated.WebPage;
 import org.apache.gora.query.Query;
@@ -32,8 +33,6 @@ import org.testcontainers.containers.GenericContainer;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.Assert.*;
 
@@ -43,12 +42,16 @@ import static org.junit.Assert.*;
  */
 public class TestCouchDBStore extends DataStoreTestBase {
 
+  private static final String DOCKER_CONTAINER_NAME = "klaemo/couchdb:1.6.1";
+  /**
+   * JUnit integration testing with Docker and Testcontainers
+   */
   @ClassRule
-  public static GenericContainer couchdb = new GenericContainer("klaemo/couchdb:1.6.1");
+  public static GenericContainer CouchDB_CONTAINER = new GenericContainer(DOCKER_CONTAINER_NAME);
 
   static {
     try {
-      setTestDriver(new GoraCouchDBTestDriver(couchdb));
+      setTestDriver(new GoraCouchDBTestDriver(CouchDB_CONTAINER));
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
@@ -108,95 +111,14 @@ public class TestCouchDBStore extends DataStoreTestBase {
   }
 
   @Test
-  public void testDelete() throws IOException {
-    WebPage page = webPageStore.newPersistent();
-
-    // Write webpage data
-    page.setUrl(new Utf8("http://example.com"));
-    byte[] contentBytes = "example content in example.com".getBytes(Charset.defaultCharset());
-    ByteBuffer buff = ByteBuffer.wrap(contentBytes);
-    page.setContent(buff);
-    webPageStore.put("com.example/http", page);
-    webPageStore.flush();
-
-    WebPage storedPage = webPageStore.get("com.example/http");
-
-    assertNotNull(storedPage);
-    assertEquals(page.getUrl(), storedPage.getUrl());
-
-    webPageStore.delete("com.example/http");
-
-    assertNull(webPageStore.get("com.example/http"));
-
-  }
-
-  @Test
-  public void testDeleteByQuery() throws IOException {
-
-    WebPage page = webPageStore.newPersistent();
-
-    // Write webpage data
-    page.setUrl(new Utf8("http://example.com"));
-    byte[] contentBytes = "example content in example.com".getBytes(Charset.defaultCharset());
-    ByteBuffer buff = ByteBuffer.wrap(contentBytes);
-    page.setContent(buff);
-    webPageStore.put("com.example/http", page);
-    webPageStore.flush();
-
-    WebPage storedPage = webPageStore.get("com.example/http");
-
-    assertNotNull(storedPage);
-    assertEquals(page.getUrl(), storedPage.getUrl());
-
-    final Query<String, WebPage> query = webPageStore.newQuery();
-    query.setKey("com.example/http");
-    webPageStore.deleteByQuery(query);
-
-    assertNull(webPageStore.get("com.example/http"));
-  }
-
-  @Test
   public void testGetSchemaName() throws IOException {
     assertEquals("WebPage", webPageStore.getSchemaName());
     assertEquals("Employee", employeeStore.getSchemaName());
   }
 
   @Test
-  public void testSchemaExist() throws IOException {
-    assertTrue(webPageStore.schemaExists());
-    webPageStore.deleteSchema();
-    assertFalse(webPageStore.schemaExists());
-
-  }
-
-  private List<WebPage> generateWebPageTestDoc(int limit) {
-    final List<WebPage> list = new ArrayList<>();
-    final String exampleURL = "http://example.com";
-    String exampleContent = "example content in example.com";
-
-    WebPage page;
-
-    for (int i = 0; i < limit; i++) {
-      page = webPageStore.newPersistent();
-      page.setUrl(new Utf8(exampleURL + i));
-      exampleContent = exampleContent + i;
-      ByteBuffer buff = ByteBuffer.wrap(exampleContent.getBytes(Charset.defaultCharset()));
-      page.setContent(buff);
-      list.add(page);
-    }
-
-    return list;
-  }
-
-  @Test
   public void testExecute() throws IOException {
-    final int allLimit = 100;
-    final List<WebPage> docList = generateWebPageTestDoc(allLimit);
-
-    for (WebPage page : docList) {
-      webPageStore.put(page.getUrl().toString(), page);
-    }
-    webPageStore.close();
+    WebPageDataCreator.createWebPageData(webPageStore);
 
     final Query<String, WebPage> query = webPageStore.newQuery();
 
@@ -205,7 +127,7 @@ public class TestCouchDBStore extends DataStoreTestBase {
     CouchDBResult<String, WebPage> result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
     assertEquals(limit, result.getResultData().size());
 
-    limit = 50;
+    limit = 10;
     query.setLimit(limit);
     result = (CouchDBResult<String, WebPage>) webPageStore.execute(query);
     assertEquals(limit, result.getResultData().size());
@@ -213,12 +135,12 @@ public class TestCouchDBStore extends DataStoreTestBase {
   }
 
   /**
-   * By design, you cannot update a CouchDB document blindly, you can only attempt to update a specific revision of a document.
+   * By design, you cannot update a CouchDB document blindly, you can only attempt to update a specific revision of a document. FIXME
    */
   @Test
   @Ignore
   public void testUpdate() throws Exception {
-
+    //By design, you cannot update a CouchDB document blindly, you can only attempt to update a specific revision of a document. FIXME
   }
 
   @Ignore("CouchDBStore doesn't support 3 types union field yet")
